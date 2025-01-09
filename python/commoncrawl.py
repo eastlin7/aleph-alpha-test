@@ -4,6 +4,9 @@ import gzip
 from typing import Generator, List, Optional
 import requests
 
+from requests.adapters import HTTPAdapter
+#import time
+from urllib3.util import Retry  # Add this import
 
 CRAWL_PATH = "cc-index/collections/CC-MAIN-2024-30/indexes"
 BASE_URL = "https://data.commoncrawl.org"
@@ -19,9 +22,18 @@ class CCDownloader(Downloader):
     def __init__(self, base_url: str) -> None:
         self.base_url = base_url
 
+        self.session = requests.Session()
+        
+        retries = Retry(
+            total=5,  
+            backoff_factor=1, 
+            status_forcelist=[500, 502, 503, 504],
+        )
+        self.session.mount('https://', HTTPAdapter(max_retries=retries))
+
     def download_and_unzip(self, url: str, start: int, length: int) -> bytes:
         headers = {"Range": f"bytes={start}-{start+length-1}"}
-        response = requests.get(f"{self.base_url}/{url}", headers=headers)
+        response = self.session.get(f"{self.base_url}/{url}", headers=headers)
         response.raise_for_status()
         buffer = response.content
         return gzip.decompress(buffer)

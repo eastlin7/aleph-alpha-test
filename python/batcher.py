@@ -13,7 +13,9 @@ from commoncrawl import (
     IndexReader,
 )
 from rabbitmq import QUEUE_NAME, MessageQueueChannel, RabbitMQChannel
+from dotenv import load_dotenv
 
+load_dotenv()
 
 BATCH_SIZE = 50
 

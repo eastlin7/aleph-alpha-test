@@ -7,7 +7,8 @@ from prometheus_client import Counter
 
 from commoncrawl import BASE_URL, CCDownloader, Downloader
 from rabbitmq import QUEUE_NAME, rabbitmq_channel
-
+from dotenv import load_dotenv
+load_dotenv()
 
 batch_counter = Counter("worker_batches", "Number of consumed batches")
 
