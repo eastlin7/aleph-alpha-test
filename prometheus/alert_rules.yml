@@ -1,0 +1,31 @@
+groups:
+- name: crawler_alerts
+  rules:
+  
+  - alert: HighExtractionFailureRate
+    expr: |
+      rate(worker_text_extraction_failures_total{instance="host.docker.internal:9001", job="worker"}[5m]) / 
+      rate(worker_documents_processed_total{instance="host.docker.internal:9001", job="worker"}[5m]) > 0.3
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High text extraction failure rate"
+
+  - alert: ProcessingBacklog
+    expr: |
+      rate(batcher_documents_accepted_total{instance="host.docker.internal:9000", job="batcher"}[5m]) -
+      rate(worker_documents_processed_total{instance="host.docker.internal:9001", job="worker"}[5m]) > 0.1
+    for: 10m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Processing backlog building up"
+
+  - alert: WorkerStalled
+    expr: rate(worker_documents_processed_total{instance="host.docker.internal:9001", job="worker"}[5m]) == 0
+    for: 5m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Worker processing has stalled"
