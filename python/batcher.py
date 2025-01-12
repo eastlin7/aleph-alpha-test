@@ -15,6 +15,10 @@ from commoncrawl import (
 from rabbitmq import QUEUE_NAME, MessageQueueChannel, RabbitMQChannel
 from dotenv import load_dotenv
 
+documents_processed = Counter('batcher_documents_processed_total', 'Total number of documents processed')
+documents_non_english = Counter('batcher_documents_filtered_non_english_total', 'Documents filtered due to non-English language')
+documents_bad_status = Counter('batcher_documents_filtered_status_total', 'Documents filtered due to non-200 status')
+documents_accepted = Counter('batcher_documents_accepted_total', 'Documents that passed all filters')
 load_dotenv()
 
 BATCH_SIZE = 50
@@ -57,27 +61,33 @@ def process_index(
         for line in data.split("\n"):
             if line == "":
                 continue
+            documents_processed.inc()
             values = line.split(" ")
             metadata = json.loads("".join(values[2:]))
-            if (
-                "languages" in metadata
-                and "eng" in metadata["languages"]
-                and metadata["status"] == "200"
-            ):
-                found_urls.append(
-                    {
-                        "surt_url": values[0],
-                        "timestamp": values[1],
-                        "metadata": metadata,
-                    }
-                )
+            
+            
+            if "languages" not in metadata or "eng" not in metadata["languages"]:
+                documents_non_english.inc()
+                continue
+                
+            if metadata["status"] != "200":
+                documents_bad_status.inc()
+                continue
+                
+            documents_accepted.inc()
+            found_urls.append(
+                {
+                    "surt_url": values[0],
+                    "timestamp": values[1],
+                    "metadata": metadata,
+                }
+            )
             if len(found_urls) >= batch_size:
                 publish_batch(channel, found_urls)
                 found_urls = []
 
     if len(found_urls) > 0:
         publish_batch(channel, found_urls)
-
 
 def main() -> None:
     args = parse_args()
