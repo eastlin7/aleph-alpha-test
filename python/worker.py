@@ -1,14 +1,13 @@
 import io
 import json
-from prometheus_client import start_http_server
+from prometheus_client import start_http_server, Counter
 import trafilatura
 from warcio.archiveiterator import WARCIterator
-from prometheus_client import Counter
 import os
 
 from commoncrawl import BASE_URL, CCDownloader, Downloader
 from rabbitmq import QUEUE_NAME, rabbitmq_channel
-from storage import MinIOStorage
+from tokenized_storage import TokenizedStorage
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -21,8 +20,8 @@ batch_counter = Counter("worker_batches", "Number of consumed batches")
 
 def process_batch(storage, downloader: Downloader, ch, method, _properties, body):
     batches_received.inc()
-    print("Received batch of size", len(body))
     batch = json.loads(body)
+    print("Received batch of size", len(body))
     
     for item in batch:
         documents_processed.inc()
@@ -52,10 +51,7 @@ def process_batch(storage, downloader: Downloader, ch, method, _properties, body
 
 def main() -> None:
     start_http_server(9001)
-    
-    # Initialize storage
-    storage = MinIOStorage()
-    
+    storage = TokenizedStorage()
     downloader = CCDownloader(BASE_URL)
     channel = rabbitmq_channel()
     channel.basic_qos(prefetch_count=1)

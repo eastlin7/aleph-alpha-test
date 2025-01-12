@@ -16,7 +16,7 @@ class MinIOStorage:
             secret_key=os.getenv('MINIO_SECRET_KEY'),
             secure=False
         )
-        self.bucket_name = os.getenv('MINIO_BUCKET_NAME', 'crawled-docs')
+        self.bucket_name = 'crawled-docs'
         self._ensure_bucket_exists()
 
     def _ensure_bucket_exists(self):
