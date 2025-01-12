@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 import json
 import argparse
+import os
 from typing import Any, Mapping, Sequence
 from prometheus_client import Counter, start_http_server
 
@@ -13,6 +14,7 @@ from commoncrawl import (
     IndexReader,
 )
 from rabbitmq import QUEUE_NAME, MessageQueueChannel, RabbitMQChannel
+from processed_urls import ProcessedURLTracker
 from dotenv import load_dotenv
 
 documents_processed = Counter('batcher_documents_processed_total', 'Total number of documents processed')
@@ -21,10 +23,9 @@ documents_bad_status = Counter('batcher_documents_filtered_status_total', 'Docum
 documents_accepted = Counter('batcher_documents_accepted_total', 'Documents that passed all filters')
 load_dotenv()
 
-BATCH_SIZE = 50
+BATCH_SIZE = 15
 
 batch_counter = Counter("batcher_batches", "Number of published batches")
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Batcher")
@@ -33,10 +34,10 @@ def parse_args() -> argparse.Namespace:
     )
     return parser.parse_args()
 
-
 def publish_batch(
     channel: MessageQueueChannel,
     batch: Sequence[Mapping[str, Any]],
+    url_tracker: ProcessedURLTracker,
 ) -> None:
     print("Pushing batch of size", len(batch))
     channel.basic_publish(
@@ -44,13 +45,16 @@ def publish_batch(
         routing_key=QUEUE_NAME,
         body=json.dumps(batch),
     )
+    # Mark URLs as processed only after successful publishing
+    for item in batch:
+        url_tracker.mark_processed(item["surt_url"], item["timestamp"])
     batch_counter.inc()
-
 
 def process_index(
     index: IndexReader,
     channel: MessageQueueChannel,
     downloader: Downloader,
+    url_tracker: ProcessedURLTracker,
     batch_size: int,
 ) -> None:
     found_urls = []
@@ -65,7 +69,6 @@ def process_index(
             values = line.split(" ")
             metadata = json.loads("".join(values[2:]))
             
-            
             if "languages" not in metadata or "eng" not in metadata["languages"]:
                 documents_non_english.inc()
                 continue
@@ -73,30 +76,37 @@ def process_index(
             if metadata["status"] != "200":
                 documents_bad_status.inc()
                 continue
+
+            url = values[0]
+            timestamp = values[1]
+            
+            # Skip if this exact URL+timestamp combination was processed
+            if url_tracker.is_processed(url, timestamp):
+                continue
                 
             documents_accepted.inc()
             found_urls.append(
                 {
-                    "surt_url": values[0],
-                    "timestamp": values[1],
+                    "surt_url": url,
+                    "timestamp": timestamp,
                     "metadata": metadata,
                 }
             )
             if len(found_urls) >= batch_size:
-                publish_batch(channel, found_urls)
+                publish_batch(channel, found_urls, url_tracker)
                 found_urls = []
 
     if len(found_urls) > 0:
-        publish_batch(channel, found_urls)
+        publish_batch(channel, found_urls, url_tracker)
 
 def main() -> None:
     args = parse_args()
     start_http_server(9000)
+    url_tracker = ProcessedURLTracker()
     channel = RabbitMQChannel()
     downloader = CCDownloader(f"{BASE_URL}/{CRAWL_PATH}")
     index_reader = CSVIndexReader(args.cluster_idx_filename)
-    process_index(index_reader, channel, downloader, BATCH_SIZE)
-
+    process_index(index_reader, channel, downloader, url_tracker, BATCH_SIZE)
 
 if __name__ == "__main__":
     main()

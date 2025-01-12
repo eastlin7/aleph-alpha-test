@@ -3,19 +3,20 @@ import json
 import uuid
 from minio import Minio
 from prometheus_client import Counter
+import os
 
 storage_successes = Counter('worker_storage_successes_total', 'Successfully stored documents')
 storage_failures = Counter('worker_storage_failures_total', 'Failed storage attempts')
 
 class MinIOStorage:
-    def __init__(self, endpoint, access_key, secret_key, bucket_name, secure=False):
+    def __init__(self):
         self.client = Minio(
-            endpoint,
-            access_key=access_key,
-            secret_key=secret_key,
-            secure=secure
+            os.getenv('MINIO_ENDPOINT'),
+            access_key=os.getenv('MINIO_ACCESS_KEY'),
+            secret_key=os.getenv('MINIO_SECRET_KEY'),
+            secure=False
         )
-        self.bucket_name = bucket_name
+        self.bucket_name = os.getenv('MINIO_BUCKET_NAME', 'crawled-docs')
         self._ensure_bucket_exists()
 
     def _ensure_bucket_exists(self):

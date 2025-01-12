@@ -54,12 +54,7 @@ def main() -> None:
     start_http_server(9001)
     
     # Initialize storage
-    storage = MinIOStorage(
-        endpoint=os.getenv("MINIO_ENDPOINT", "localhost:9500"),
-        access_key=os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
-        secret_key=os.getenv("MINIO_SECRET_KEY", "minioadmin"),
-        bucket_name=os.getenv("MINIO_BUCKET_NAME", "crawled-docs")
-    )
+    storage = MinIOStorage()
     
     downloader = CCDownloader(BASE_URL)
     channel = rabbitmq_channel()
