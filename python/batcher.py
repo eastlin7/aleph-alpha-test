@@ -108,8 +108,9 @@ def main() -> None:
     url_tracker = ProcessedURLTracker()
     channel = RabbitMQChannel()
     downloader = CCDownloader(f"{BASE_URL}/{CRAWL_PATH}")
-    index_reader = CSVIndexReader(args.cluster_idx_filename)
-    process_index(index_reader, channel, downloader, url_tracker, BATCH_SIZE)
+    
+    with CSVIndexReader(args.cluster_idx_filename) as index_reader:
+        process_index(index_reader, channel, downloader, url_tracker, BATCH_SIZE)
 
 if __name__ == "__main__":
     main()
