@@ -1,7 +1,6 @@
 from abc import ABC, abstractmethod
 import json
 import argparse
-import os
 from typing import Any, Mapping, Sequence
 from prometheus_client import Counter, start_http_server
 
@@ -51,6 +50,7 @@ def publish_batch(
     batch_counter.inc()
 
 def process_index(index, channel, downloader, url_tracker, batch_size):
+    print("indexing")
     found_urls = []
     for cdx_chunk in index:
         data = downloader.download_and_unzip(
