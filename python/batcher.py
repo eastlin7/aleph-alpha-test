@@ -23,7 +23,7 @@ documents_bad_status = Counter('batcher_documents_filtered_status_total', 'Docum
 documents_accepted = Counter('batcher_documents_accepted_total', 'Documents that passed all filters')
 load_dotenv()
 
-BATCH_SIZE = 15
+BATCH_SIZE = 5
 
 batch_counter = Counter("batcher_batches", "Number of published batches")
 
@@ -45,59 +45,62 @@ def publish_batch(
         routing_key=QUEUE_NAME,
         body=json.dumps(batch),
     )
-    # Mark URLs as processed only after successful publishing
+    
     for item in batch:
         url_tracker.mark_processed(item["surt_url"], item["timestamp"])
     batch_counter.inc()
 
-def process_index(
-    index: IndexReader,
-    channel: MessageQueueChannel,
-    downloader: Downloader,
-    url_tracker: ProcessedURLTracker,
-    batch_size: int,
-) -> None:
+def process_index(index, channel, downloader, url_tracker, batch_size):
     found_urls = []
     for cdx_chunk in index:
         data = downloader.download_and_unzip(
             cdx_chunk[1], int(cdx_chunk[2]), int(cdx_chunk[3])
         ).decode("utf-8")
+        
+        
         for line in data.split("\n"):
             if line == "":
                 continue
             documents_processed.inc()
             values = line.split(" ")
-            metadata = json.loads("".join(values[2:]))
-            
-            if "languages" not in metadata or "eng" not in metadata["languages"]:
-                documents_non_english.inc()
-                continue
+            try:
+                metadata = json.loads("".join(values[2:]))
                 
-            if metadata["status"] != "200":
-                documents_bad_status.inc()
-                continue
+                if "languages" not in metadata or "eng" not in metadata["languages"]:
+                    documents_non_english.inc()
+                    continue
+                    
+                if metadata["status"] != "200":
+                    documents_bad_status.inc()
+                    continue
 
-            url = values[0]
-            timestamp = values[1]
-            
-            # Skip if this exact URL+timestamp combination was processed
-            if url_tracker.is_processed(url, timestamp):
-                continue
+                url = values[0]
+                timestamp = values[1]
                 
-            documents_accepted.inc()
-            found_urls.append(
-                {
-                    "surt_url": url,
-                    "timestamp": timestamp,
-                    "metadata": metadata,
-                }
-            )
-            if len(found_urls) >= batch_size:
-                publish_batch(channel, found_urls, url_tracker)
-                found_urls = []
+                if url_tracker.is_processed(url, timestamp):
+                    continue
+                    
+                documents_accepted.inc()
+                found_urls.append(
+                    {
+                        "surt_url": url,
+                        "timestamp": timestamp,
+                        "metadata": metadata,
+                    }
+                )
+                
+                if len(found_urls) >= batch_size:
+                    publish_batch(channel, found_urls, url_tracker)
+                    found_urls = []
+                    
+            except json.JSONDecodeError as e:
+                
+                continue
 
     if len(found_urls) > 0:
         publish_batch(channel, found_urls, url_tracker)
+
+
 
 def main() -> None:
     args = parse_args()

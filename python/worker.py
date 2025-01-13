@@ -40,6 +40,7 @@ def process_batch(storage, downloader: Downloader, ch, method, _properties, body
                             text_extraction_failures.inc()
                         else:
                             successful_extractions.inc()
+                            item["metadata"]["timestamp"] = item["timestamp"]
                             storage.store_document(text, item["metadata"])
                     except Exception:
                         text_extraction_failures.inc()
