@@ -7,6 +7,8 @@ from commoncrawl import BASE_URL, CCDownloader, Downloader
 from rabbitmq import QUEUE_NAME, rabbitmq_channel
 from tokenized_storage import TokenizedStorage
 from dotenv import load_dotenv
+import logging
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -30,7 +32,15 @@ batch_counter = Counter("worker_batches", "Number of consumed batches")
 
 def process_batch(storage, downloader: Downloader, ch, method, _properties, body):
     batches_received.inc()
-    batch = json.loads(body) # TODO: This can fail, is fine or no
+    batch = None
+    try:
+        batch = json.loads(body) 
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse batch JSON: {e}")
+        # Acknowledge the message so it's not requeued
+        ch.basic_ack(delivery_tag=method.delivery_tag)
+        return
+        
     print("Received batch of size", len(body)) # TODO: Clean up all prints?
 
     for item in batch:

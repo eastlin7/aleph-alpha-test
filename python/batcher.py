@@ -99,7 +99,7 @@ def process_index(index, channel, downloader, url_tracker, batch_size):
                 url = values[0]
                 timestamp = values[1]
 
-                if url_tracker.is_processed(url, timestamp):
+                if url_tracker.is_processed(url, timestamp): # TODO: Error handle the is_processed
                     continue
 
                 documents_accepted.inc()

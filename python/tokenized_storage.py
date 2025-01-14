@@ -7,11 +7,11 @@ import uuid
 import base64
 from storage import MinIOStorage
 from prometheus_client import Counter, Histogram
-from exceptions import StorageError
+from exceptions import StorageError, TokenizationError  # Add TokenizationError import
 import os
 import warnings
-import logging
 from typing import List, Dict, Any, Tuple
+import logging
 
 
 logging.basicConfig(level=logging.INFO)
@@ -37,7 +37,6 @@ padding_length = Histogram(
 sequence_length = Histogram(
     "worker_sequence_length", "Distribution of sequence lengths before padding"
 )
-
 
 
 class TokenizationStatus(Enum):
@@ -93,10 +92,9 @@ class TokenizedStorage(MinIOStorage):
             raise TokenizationError(f"Failed to pad sequence: {e}")
 
     def tokenize_with_chunks(self, text: str) -> Dict[str, Any]:
-        """Tokenize text"""
+        """Tokenize text with proper error throwing and validation"""
         if not text or not text.strip():
             logger.warning("Empty or whitespace-only text provided")
-            # TODO: WHY NO ERROR? AND WHY NO INREMENT ERROR
             return {
                 "status": TokenizationStatus.FAILED,
                 "error": "Empty or whitespace-only text",
@@ -104,7 +102,7 @@ class TokenizedStorage(MinIOStorage):
 
         try:
             with warnings.catch_warnings():
-                #warnings.simplefilter("ignore")
+                warnings.simplefilter("ignore")
                 tokens = self.tokenizer.encode(text, add_special_tokens=False)
 
             chunks = []
@@ -144,44 +142,53 @@ class TokenizedStorage(MinIOStorage):
             return {"status": TokenizationStatus.FAILED, "error": str(e)}
 
     def store_document(self, text: str, metadata: Dict[str, Any]) -> bool:
-        """Store tokenized document"""
+        """Store tokenized document with comprehensive error handling"""
         tokenization_result = self.tokenize_with_chunks(text)
 
         if tokenization_result["status"] != TokenizationStatus.SUCCESS:
-            logger.error(f"Tokenization failed: {tokenization_result.get('error')}")
-            raise StorageError(f"Bucket operation failed: {e}")
+            error_msg = tokenization_result.get("error", "Unknown tokenization error")
+            logger.error(f"Tokenization failed: {error_msg}")
+            raise StorageError(f"Tokenization failed: {error_msg}")
 
-        doc_id = str(uuid.uuid4())
-        document_data = {
-            "chunks": [
-                {
-                    "input_ids": base64.b64encode(
-                        np.array(chunk["input_ids"], dtype=np.int32).tobytes()
-                    ).decode("utf-8"),
-                    "attention_mask": base64.b64encode(
-                        np.array(chunk["attention_mask"], dtype=np.int32).tobytes()
-                    ).decode("utf-8"),
-                    "chunk_index": chunk["chunk_index"],
-                }
-                for chunk in tokenization_result["chunks"]
-            ],
-            "total_chunks": len(tokenization_result["chunks"]),
-            "metadata": {
-                "timestamp": metadata.get("timestamp"),
-                "url": metadata.get("url"),
-                "stride": self.stride,
-                "max_length": self.max_length,
-                "original_length": tokenization_result["chunks"][0]["original_length"],
-            },
-        }
+        try:
+            doc_id = str(uuid.uuid4())
+            document_data = {
+                "chunks": [
+                    {
+                        "input_ids": base64.b64encode(
+                            np.array(chunk["input_ids"], dtype=np.int32).tobytes()
+                        ).decode("utf-8"),
+                        "attention_mask": base64.b64encode(
+                            np.array(chunk["attention_mask"], dtype=np.int32).tobytes()
+                        ).decode("utf-8"),
+                        "chunk_index": chunk["chunk_index"],
+                    }
+                    for chunk in tokenization_result["chunks"]
+                ],
+                "total_chunks": len(tokenization_result["chunks"]),
+                "metadata": {
+                    "timestamp": metadata.get("timestamp"),
+                    "url": metadata.get("url"),
+                    "stride": self.stride,
+                    "max_length": self.max_length,
+                    "original_length": tokenization_result["chunks"][0][
+                        "original_length"
+                    ],
+                },
+            }
 
-        json_data = json.dumps(document_data).encode()
-        self.client.put_object(
-            self.bucket_name,
-            f"{doc_id}.json",
-            io.BytesIO(json_data),
-            len(json_data),
-        )
+            json_data = json.dumps(document_data).encode()
+            self.client.put_object(
+                self.bucket_name,
+                f"{doc_id}.json",
+                io.BytesIO(json_data),
+                len(json_data),
+            )
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to store document: {e}")
+            raise StorageError(f"Failed to store document: {e}")
 
     def _validate_tokenizer(self) -> None:
         """Validate tokenizer has required tokens"""

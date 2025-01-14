@@ -13,14 +13,16 @@ from tenacity import (
 )
 from prometheus_client import Counter, Histogram
 
-# Set up logging
+from exceptions import DownloadError  
+
+
 logger = logging.getLogger(__name__)
 
-# Constants
+
 CRAWL_PATH = "cc-index/collections/CC-MAIN-2024-30/indexes"
 BASE_URL = "https://data.commoncrawl.org"
 
-# Metrics
+
 download_retries = Counter(
     "commoncrawl_download_retries_total", "Number of retried downloads"
 )
@@ -33,12 +35,6 @@ download_successes = Counter(
 download_time = Histogram(
     "commoncrawl_download_duration_seconds", "Time spent downloading"
 )
-
-
-class DownloadError(Exception):
-    """Custom exception for download-related errors"""
-
-    pass
 
 
 class Downloader(ABC):
@@ -56,7 +52,7 @@ class CCDownloader(Downloader):
         stop=stop_after_attempt(5),
         wait=wait_exponential(multiplier=1, min=4, max=60),
         retry=retry_if_exception_type(
-            (requests.RequestException, requests.ConnectionError)
+            (requests.RequestException, requests.ConnectionError, DownloadError)  # Add DownloadError
         ),
         before=before_log(logger, logging.DEBUG),
         after=lambda retry_state: download_retries.inc(),

@@ -45,24 +45,32 @@ class ProcessedURLTracker:
             storage_errors.labels(error_type="bucket_creation").inc()
             raise StorageError(f"Bucket operation failed: {e}")
 
+
+
+    def raise_storage_error(retry_state):
+        # This callback is invoked after all retry attempts fail.
+        # We raise a StorageError with our custom message.
+        raise StorageError("Failed to check processed status") from retry_state.outcome.exception()
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=4, max=10),
         retry=retry_if_exception_type(MinioException),
+        retry_error_callback=raise_storage_error,
     )
     def is_processed(self, url: str, timestamp: str) -> bool:
-        """Check if URL has been processed with proper error handling"""
+        key = self._generate_key(url, timestamp)
         try:
-            key = self._generate_key(url, timestamp)
             self.client.stat_object(self.bucket_name, f"{key}.marker")
-            documents_duplicate.inc()
-            return True
         except MinioException as e:
-            if "NoSuchKey" in str(e):  # Object doesn't exist
+            if "NoSuchKey" in str(e):
                 return False
-            logger.error(f"Error checking processed status: {e}")
-            storage_errors.labels(error_type="check_processed").inc()
-            raise StorageError(f"Failed to check processed status: {e}")
+            raise
+
+        return True
+    
+    
+
 
     @retry(
         stop=stop_after_attempt(3),
@@ -87,11 +95,9 @@ class ProcessedURLTracker:
         retry=retry_if_exception_type(MinioException),
         after=lambda retry_state: minio_retries.inc(),
     )
-    def _ensure_bucket_exists(self) -> None:
-        """Ensure bucket exists with retries"""
+    def _ensure_bucket_exists(self):
         if not self.client.bucket_exists(self.bucket_name):
             self.client.make_bucket(self.bucket_name)
-            logger.info(f"Created new bucket: {self.bucket_name}")
 
     def _generate_key(self, url: str, timestamp: str) -> str:
         """Generate a unique key for the URL record"""
