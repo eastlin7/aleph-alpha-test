@@ -5,6 +5,7 @@ from prometheus_client import Counter
 import io
 import os
 import logging
+from exceptions import StorageError
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -25,11 +26,6 @@ storage_errors = Counter(
 )
 minio_retries = Counter("minio_retries_total", "Number of retried Minio operations")
 
-
-class StorageError(Exception):
-    """Base exception for storage-related errors"""
-
-    pass
 
 
 class ProcessedURLTracker:

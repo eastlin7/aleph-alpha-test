@@ -7,6 +7,7 @@ import uuid
 import base64
 from storage import MinIOStorage
 from prometheus_client import Counter, Histogram
+from exceptions import StorageError
 import os
 import warnings
 import logging
@@ -37,11 +38,6 @@ sequence_length = Histogram(
     "worker_sequence_length", "Distribution of sequence lengths before padding"
 )
 
-
-class TokenizationError(Exception):
-    """Custom exception for tokenization errors"""
-
-    pass
 
 
 class TokenizationStatus(Enum):
@@ -97,7 +93,7 @@ class TokenizedStorage(MinIOStorage):
             raise TokenizationError(f"Failed to pad sequence: {e}")
 
     def tokenize_with_chunks(self, text: str) -> Dict[str, Any]:
-        """Tokenize text with proper error throwing and validation"""
+        """Tokenize text"""
         if not text or not text.strip():
             logger.warning("Empty or whitespace-only text provided")
             # TODO: WHY NO ERROR? AND WHY NO INREMENT ERROR
@@ -108,7 +104,7 @@ class TokenizedStorage(MinIOStorage):
 
         try:
             with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
+                #warnings.simplefilter("ignore")
                 tokens = self.tokenizer.encode(text, add_special_tokens=False)
 
             chunks = []
@@ -148,12 +144,11 @@ class TokenizedStorage(MinIOStorage):
             return {"status": TokenizationStatus.FAILED, "error": str(e)}
 
     def store_document(self, text: str, metadata: Dict[str, Any]) -> bool:
-        """Store tokenized document with comprehensive error handling"""
+        """Store tokenized document"""
         tokenization_result = self.tokenize_with_chunks(text)
 
         if tokenization_result["status"] != TokenizationStatus.SUCCESS:
             logger.error(f"Tokenization failed: {tokenization_result.get('error')}")
-            # TODO: WHY FALSE AND NO ERROR
             raise StorageError(f"Bucket operation failed: {e}")
 
         doc_id = str(uuid.uuid4())
