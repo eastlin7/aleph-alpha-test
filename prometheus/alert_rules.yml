@@ -4,8 +4,7 @@ groups:
   
   - alert: HighExtractionFailureRate
     expr: |
-      rate(worker_text_extraction_failures_total{instance="host.docker.internal:9001", job="worker"}[5m]) / 
-      rate(worker_documents_processed_total{instance="host.docker.internal:9001", job="worker"}[5m]) > 0.3
+      rate(worker_text_extraction_failures_total[5m]) / rate(worker_documents_processed_total[5m]) > 0.3
     for: 5m
     labels:
       severity: warning
