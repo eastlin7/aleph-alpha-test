@@ -1,10 +1,9 @@
-from abc import ABC, abstractmethod
 import json
 import argparse
 import logging
 from typing import Any, Mapping, Sequence
 from prometheus_client import Counter, start_http_server
-
+import sys
 from commoncrawl import (
     BASE_URL,
     CRAWL_PATH,
@@ -14,7 +13,9 @@ from commoncrawl import (
 from rabbitmq import QUEUE_NAME, MessageQueueChannel, RabbitMQChannel
 from processed_url_tracker import ProcessedURLTracker
 from dotenv import load_dotenv
+from exceptions import PublishError
 
+MAX_BATCH_SIZE = 15  # or whatever limit makes sense for your use case
 
 logger = logging.getLogger(__name__)
 
@@ -52,25 +53,51 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _validate_batch(batch: Sequence[Mapping[str, Any]]) -> bool:
+    """Validate batch size and content"""
+    if not batch:
+        logger.warning("Received empty batch to publish")
+        return False
+        
+    if len(batch) > MAX_BATCH_SIZE:
+        raise ValueError(f"Batch size {len(batch)} exceeds maximum {MAX_BATCH_SIZE}")
+    
+    return True
+
+def _publish_to_queue(channel: MessageQueueChannel, batch: Sequence[Mapping[str, Any]]) -> None:
+    """Publish batch to message queue"""
+    try:
+        serialized_batch = json.dumps(batch)
+        channel.basic_publish(
+            exchange="",
+            routing_key=QUEUE_NAME,
+            body=serialized_batch
+        )
+    except Exception as e:
+        logger.error(f"Failed to publish batch: {e}")
+        raise PublishError(f"Message queue publish failed: {e}")
+
+def _track_processed_urls(url_tracker: ProcessedURLTracker, batch: Sequence[Mapping[str, Any]]) -> None:
+    """Mark URLs as processed in tracker"""
+    for item in batch:
+        url_tracker.mark_processed(item["surt_url"], item["timestamp"])
+
 def publish_batch(
     channel: MessageQueueChannel,
     batch: Sequence[Mapping[str, Any]],
     url_tracker: ProcessedURLTracker,
 ) -> None:
-    logger.info("Pushing batch of size", len(batch))
-    
-    # TODO: This can fail deal with it
-    channel.basic_publish(
-        exchange="",
-        routing_key=QUEUE_NAME,
-        body=json.dumps(batch),
-    )
-
-    for item in batch:
-        # TODO: This can fail deal with it
-        url_tracker.mark_processed(item["surt_url"], item["timestamp"])
+    """Publish batch and track URLs"""
+    if not _validate_batch(batch):
+        return
         
+    logger.info(f"Publishing batch of {len(batch)} items")
+    
+    _publish_to_queue(channel, batch)
+    _track_processed_urls(url_tracker, batch)
+    
     batch_counter.inc()
+    logger.info(f"Successfully published batch of {len(batch)} items")
 
 
 def process_index(index, channel, downloader, url_tracker, batch_size):
@@ -125,17 +152,19 @@ def process_index(index, channel, downloader, url_tracker, batch_size):
 
 
 def main() -> None:
-    args = parse_args()
-    # TODO: Try and decide what to do
-    start_http_server(9000)
-    url_tracker = ProcessedURLTracker()
-    channel = RabbitMQChannel()
-    downloader = CCDownloader(f"{BASE_URL}/{CRAWL_PATH}")
+    try:
+        args = parse_args()
+        start_http_server(9000)
+        url_tracker = ProcessedURLTracker()
+        channel = RabbitMQChannel()
+        downloader = CCDownloader(f"{BASE_URL}/{CRAWL_PATH}")
 
-    with CSVIndexReader(args.cluster_idx_filename) as index_reader:
-        # TODO: Add try & 
-        process_index(index_reader, channel, downloader, url_tracker, BATCH_SIZE)
+        with CSVIndexReader(args.cluster_idx_filename) as index_reader:
+            process_index(index_reader, channel, downloader, url_tracker, BATCH_SIZE)
 
+    except Exception as e:
+        logger.exception("Unhandled exception in main:")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

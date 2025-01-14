@@ -7,6 +7,7 @@ from commoncrawl import BASE_URL, CCDownloader, Downloader
 from rabbitmq import QUEUE_NAME, rabbitmq_channel
 from tokenized_storage import TokenizedStorage
 from dotenv import load_dotenv
+import sys
 import logging
 logger = logging.getLogger(__name__)
 
@@ -72,19 +73,26 @@ def process_batch(storage, downloader: Downloader, ch, method, _properties, body
     batch_counter.inc()
     ch.basic_ack(delivery_tag=method.delivery_tag)
 
+
 def main() -> None:
-    start_http_server(9001)
-    storage = TokenizedStorage()
-    downloader = CCDownloader(BASE_URL)
-    channel = rabbitmq_channel()
-    channel.basic_qos(prefetch_count=1)
-    channel.basic_consume(
-        queue=QUEUE_NAME,
-        on_message_callback=lambda ch, method, properties, body: process_batch(
-            storage, downloader, ch, method, properties, body
-        ),
-    )
-    channel.start_consuming()
+    try:
+        start_http_server(9001)
+        storage = TokenizedStorage()
+        downloader = CCDownloader(BASE_URL)
+        channel = rabbitmq_channel()
+
+        channel.basic_qos(prefetch_count=1)
+        channel.basic_consume(
+            queue=QUEUE_NAME,
+            on_message_callback=lambda ch, method, properties, body: process_batch(
+                storage, downloader, ch, method, properties, body
+            ),
+        )
+        channel.start_consuming()
+
+    except Exception as e:
+        logger.exception("Unhandled exception in main:")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

@@ -1,7 +1,10 @@
-from batcher import process_index
+from batcher import process_index, publish_batch, PublishError
+from commoncrawl import Downloader, IndexReader
 from commoncrawl import Downloader, IndexReader
 from rabbitmq import MessageQueueChannel
 from unittest.mock import Mock
+import pytest
+import json
 
 class FakeReader(IndexReader):
     def __init__(self, data):
@@ -102,3 +105,95 @@ def test_publish_all_urls():
     process_index(reader, channel, downloader, url_tracker, 2)
     assert channel.num_called > 0, "Channel was never called"
     assert channel.num_called == 3, f"Expected 3 calls, got {channel.num_called}"
+
+
+
+
+def test_publish_batch_handles_publish_error():
+    """Test handling of publish failures"""
+    channel = Mock()
+    channel.basic_publish.side_effect = Exception("Connection failed")
+    url_tracker = Mock()
+    
+    batch = [
+        {
+            "surt_url": "test.com",
+            "timestamp": "20240101",
+            "metadata": {"status": "200"}
+        }
+    ]
+    
+    with pytest.raises(PublishError):
+        publish_batch(channel, batch, url_tracker)
+    
+    # Verify URL tracker wasn't called since publish failed
+    url_tracker.mark_processed.assert_not_called()
+
+def test_process_index_handles_json_decode_error():
+    """Test handling of invalid JSON in the input data"""
+    reader = FakeReader([
+        ["test.com", "cdx-00000.gz", "0", "100", "1"]
+    ])
+    
+    channel = ChannelSpy()
+    # Provide invalid JSON in the data
+    downloader = FakeDownloader('test.com 20240101 {invalid_json}')
+    url_tracker = Mock()
+    url_tracker.is_processed.return_value = False
+    
+    # Should not raise exception, should continue processing
+    process_index(reader, channel, downloader, url_tracker, 2)
+    assert channel.num_called == 0
+
+def test_batch_processing_respects_size():
+    """Test that batches are published when reaching specified size"""
+    reader = FakeReader([
+        ["url1", "cdx-00000.gz", "0", "100", "1"],
+        ["url2", "cdx-00000.gz", "100", "100", "2"],
+        ["url3", "cdx-00000.gz", "200", "100", "3"]
+    ])
+    
+    channel = ChannelSpy()
+    valid_doc = {
+        "url": "test.com",
+        "status": "200",
+        "languages": ["eng"]
+    }
+    
+    downloader = FakeDownloader(
+        f'test.com 20240101 {json.dumps(valid_doc)}'
+    )
+    
+    url_tracker = Mock()
+    url_tracker.is_processed.return_value = False
+    
+    batch_size = 2
+    process_index(reader, channel, downloader, url_tracker, batch_size)
+    
+    # With 3 valid documents and batch size 2, should have 2 batches
+    # One full batch of 2 and one partial batch of 1
+    assert channel.num_called == 2
+
+def test_skip_already_processed_urls():
+    """Test that already processed URLs are skipped"""
+    reader = FakeReader([
+        ["test.com", "cdx-00000.gz", "0", "100", "1"]
+    ])
+    
+    channel = ChannelSpy()
+    valid_doc = {
+        "url": "test.com",
+        "status": "200",
+        "languages": ["eng"]
+    }
+    
+    downloader = FakeDownloader(
+        f'test.com 20240101 {json.dumps(valid_doc)}'
+    )
+    
+    url_tracker = Mock()
+    # Simulate URL already being processed
+    url_tracker.is_processed.return_value = True
+    
+    process_index(reader, channel, downloader, url_tracker, 2)
+    assert channel.num_called == 0

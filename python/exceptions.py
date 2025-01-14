@@ -11,6 +11,13 @@ class TokenizationError(Exception):
 
 
 
+
+
+class PublishError(Exception):
+    """Custom exception for download-related errors"""
+    pass
+
+
 class DownloadError(Exception):
     """Custom exception for download-related errors"""
     pass

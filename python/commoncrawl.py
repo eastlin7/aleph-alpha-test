@@ -96,7 +96,7 @@ class CCDownloader(Downloader):
 
         except requests.RequestException as e:
             
-            # TODO: is this correct thing to raise? What about raise for status?
+            
             download_failures.inc()
             logger.error(f"Failed to download from {url}: {e}")
             raise DownloadError(f"Download failed: {e}")
