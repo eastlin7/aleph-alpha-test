@@ -21,6 +21,10 @@ class ProcessedURLTracker:
         self.storage = storage
 
     def is_processed(self, url: str, timestamp: str) -> bool:
+        if not url:
+            raise ValueError("url cannot be empty")
+        if not timestamp:
+            raise ValueError("timestamp cannot be empty")
         key = self._generate_key(url, timestamp)
         return self.storage.key_exists(f"{key}.marker")
 
@@ -30,10 +34,25 @@ class ProcessedURLTracker:
         retry=retry_if_exception_type(StorageError),
     )
     def mark_processed(self, url: str, timestamp: str) -> None:
-        """Mark URL as processed with proper error handling"""
+        """Mark URL as processed with proper error handling
         
+        Args:
+            url: The URL to mark as processed
+            timestamp: The timestamp for the URL
+            
+        Raises:
+            ValueError: If url or timestamp is empty
+            StorageError: If storage operation fails
+        """
+        if not url:
+            print("not url")
+            raise ValueError("url cannot be empty")
+        if not timestamp:
+            print("not timestamp")
+            raise ValueError("timestamp cannot be empty")
+            
         key = self._generate_key(url, timestamp)
-        empty_data = ""
+        empty_data = b""
         
         try:
             self.storage.put_object(f"{key}.marker", empty_data)

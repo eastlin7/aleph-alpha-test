@@ -62,3 +62,65 @@ def test_initialization_handles_minio_exception(mock_minio):
 
 
 # TODO Add the missing 2 tests
+
+def test_key_exists_success(disable_retry, mock_minio):
+    """Test successful check for existing key"""
+    mock_client = mock_minio.return_value
+    storage = MinIOStorage("test-bucket", "localhost:9000", "access", "secret")
+    
+    # Setup mock for existing object
+    mock_client.stat_object.return_value = True
+    
+    result = storage.key_exists("existing-key")
+    
+    assert result is True
+    mock_client.stat_object.assert_called_once_with("test-bucket", "existing-key")
+
+def test_key_exists_missing_key(disable_retry, mock_minio):
+    """Test behavior when key doesn't exist"""
+    mock_client = mock_minio.return_value
+    storage = MinIOStorage("test-bucket", "localhost:9000", "access", "secret")
+    
+    # Setup mock for missing object
+    mock_client.stat_object.side_effect = MinioException("NoSuchKey: The specified key does not exist")
+    
+    result = storage.key_exists("non-existing-key")
+    
+    assert result is False
+
+    mock_client.stat_object.assert_called_once_with("test-bucket", "non-existing-key")
+
+
+def test_put_object_success(disable_retry, mock_minio):
+    mock_client = mock_minio.return_value
+    storage = MinIOStorage("test-bucket", "localhost:9000", "access", "secret")
+    
+    key = "test-key"
+    data = b"test data"
+    length = len(data)
+    
+    storage.put_object(key, data, length)
+    
+    called_args = mock_client.put_object.call_args[0]
+    assert called_args[0] == "test-bucket"  # bucket name
+    assert called_args[1] == "test-key"     # key
+    assert isinstance(called_args[2], io.BytesIO)  # data stream
+    assert called_args[3] == length         # length
+
+        
+def test_put_object_failure(disable_retry, mock_minio):
+    mock_client = mock_minio.return_value
+    storage = MinIOStorage("test-bucket", "localhost:9000", "access", "secret")
+    
+    key = "test-key"
+    data = b"test data"
+    length = len(data)
+    
+    # Mock MinioException instead of ValueError
+    mock_client.put_object.side_effect = MinioException("Failed to put object")
+    
+    with pytest.raises(StorageError) as exc_info:
+        storage.put_object(key, data, length)
+    
+    assert "Failed to put object" in str(exc_info.value)
+    mock_client.put_object.assert_called_once()

@@ -33,7 +33,10 @@ class MinIOStorage:
         retry_error_callback=raise_storage_error,
     )
     def put_object(self, key, data, length=0):
-        self.client.put_object(self.bucket_name, key, io.BytesIO(data), length)
+        try:
+            self.client.put_object(self.bucket_name, key, io.BytesIO(data), length)
+        except MinioException as e:
+            raise StorageError(f"Failed to put object: {str(e)}")
     
     def _ensure_bucket_exists(self):
         if not self.client.bucket_exists(self.bucket_name):
