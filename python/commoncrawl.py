@@ -13,15 +13,12 @@ from tenacity import (
 )
 from prometheus_client import Counter, Histogram
 
-from exceptions import DownloadError  
-
+from exceptions import DownloadError
 
 logger = logging.getLogger(__name__)
 
-
 CRAWL_PATH = "cc-index/collections/CC-MAIN-2024-30/indexes"
 BASE_URL = "https://data.commoncrawl.org"
-
 
 download_retries = Counter(
     "commoncrawl_download_retries_total", "Number of retried downloads"
@@ -36,12 +33,10 @@ download_time = Histogram(
     "commoncrawl_download_duration_seconds", "Time spent downloading"
 )
 
-
 class Downloader(ABC):
     @abstractmethod
     def download_and_unzip(self, url: str, start: int, length: int) -> bytes:
         pass
-
 
 class CCDownloader(Downloader):
     def __init__(self, base_url: str) -> None:
@@ -52,7 +47,7 @@ class CCDownloader(Downloader):
         stop=stop_after_attempt(5),
         wait=wait_exponential(multiplier=1, min=4, max=60),
         retry=retry_if_exception_type(
-            (requests.RequestException, requests.ConnectionError, DownloadError)  # Add DownloadError
+            (requests.RequestException, requests.ConnectionError, DownloadError)
         ),
         before=before_log(logger, logging.DEBUG),
         after=lambda retry_state: download_retries.inc(),
@@ -80,7 +75,7 @@ class CCDownloader(Downloader):
                 response = self.session.get(
                     full_url,
                     headers=headers,
-                    timeout=(10, 30),  # (connect timeout, read timeout)
+                    timeout=(10, 30),
                 )
 
             response.raise_for_status()
@@ -91,14 +86,13 @@ class CCDownloader(Downloader):
                 return decompressed_data
             except gzip.BadGzipFile as e:
                 download_failures.inc()
-                logger.error(f"Failed to decompress data from {url}: {e}")
+                logger.error(f"Failed to decompress data from {url}")
                 raise DownloadError(f"Decompression failed: {e}")
 
         except requests.RequestException as e:
-            
-            
+
             download_failures.inc()
-            logger.error(f"Failed to download from {url}: {e}")
+            logger.error(f"Failed to download from {url}")
             raise DownloadError(f"Download failed: {e}")
 
 
@@ -128,7 +122,6 @@ class CSVIndexReader(IndexReader):
         self.file = open(self.filename, "r")
         self.reader = csv.reader(self.file, delimiter="\t")
         return self
-        
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.file:
@@ -139,7 +132,6 @@ class CSVIndexReader(IndexReader):
 
     def __next__(self):
         return next(self.reader)
-        
 
 
 def test_can_read_index(tmp_path):

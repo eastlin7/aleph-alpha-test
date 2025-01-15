@@ -1,9 +1,6 @@
 import hashlib
-from minio import Minio
-from minio.error import MinioException, S3Error
 from prometheus_client import Counter
 import io
-import os
 import logging
 from exceptions import StorageError
 from tenacity import (
@@ -13,64 +10,19 @@ from tenacity import (
     retry_if_exception_type,
 )
 
-# Set up logging
 logger = logging.getLogger(__name__)
 
-# Metrics
-documents_duplicate = Counter(
-    "batcher_documents_duplicate_total",
-    "Documents filtered due to being already processed",
-)
 storage_errors = Counter(
     "storage_errors_total", "Storage operation errors", ["error_type"]
 )
-minio_retries = Counter("minio_retries_total", "Number of retried Minio operations")
-
-
 
 class ProcessedURLTracker:
-    def __init__(self):
-        """Initialize the URL tracker with proper error handling"""
-        try:
-            self.client = Minio(
-                os.getenv("MINIO_ENDPOINT", "localhost:9500"),
-                access_key=os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
-                secret_key=os.getenv("MINIO_SECRET_KEY", "minioadmin"),
-                secure=False,
-            )
-            self.bucket_name = "processed-urls"
-            self._ensure_bucket_exists()
+    def __init__(self, storage):
+        self.storage = storage
 
-        except MinioException as e:
-            storage_errors.labels(error_type="bucket_creation").inc()
-            raise StorageError(f"Bucket operation failed: {e}")
-
-
-
-    def raise_storage_error(retry_state):
-        # This callback is invoked after all retry attempts fail.
-        # We raise a StorageError with our custom message.
-        raise StorageError("Failed to check processed status") from retry_state.outcome.exception()
-
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=4, max=10),
-        retry=retry_if_exception_type(MinioException),
-        retry_error_callback=raise_storage_error,
-    )
     def is_processed(self, url: str, timestamp: str) -> bool:
         key = self._generate_key(url, timestamp)
-        try:
-            self.client.stat_object(self.bucket_name, f"{key}.marker")
-        except MinioException as e:
-            if "NoSuchKey" in str(e):
-                return False
-            raise
-
-        return True
-    
-    
-
+        return self.storage.key_exists(f"{key}.marker")
 
     @retry(
         stop=stop_after_attempt(3),
@@ -79,25 +31,16 @@ class ProcessedURLTracker:
     )
     def mark_processed(self, url: str, timestamp: str) -> None:
         """Mark URL as processed with proper error handling"""
+        
+        key = self._generate_key(url, timestamp)
+        empty_data = ""
+        
         try:
-            key = self._generate_key(url, timestamp)
-            empty_data = io.BytesIO(b"")
-            self.client.put_object(self.bucket_name, f"{key}.marker", empty_data, 0)
-            logger.debug(f"Marked as processed: {url}")
-        except MinioException as e:
-            logger.error(f"Failed to mark URL as processed: {e}")
+            self.storage.put_object(f"{key}.marker", empty_data)
+        except StorageError:
+            logger.error(f"Failed to mark URL as processed:")
             storage_errors.labels(error_type="mark_processed").inc()
-            raise StorageError(f"Failed to mark as processed: {e}")
-
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=4, max=10),
-        retry=retry_if_exception_type(MinioException),
-        after=lambda retry_state: minio_retries.inc(),
-    )
-    def _ensure_bucket_exists(self):
-        if not self.client.bucket_exists(self.bucket_name):
-            self.client.make_bucket(self.bucket_name)
+            raise
 
     def _generate_key(self, url: str, timestamp: str) -> str:
         """Generate a unique key for the URL record"""

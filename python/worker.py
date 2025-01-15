@@ -1,14 +1,16 @@
 import io
 import json
 from prometheus_client import start_http_server, Counter
-import trafilatura
-from warcio.archiveiterator import WARCIterator
-from commoncrawl import BASE_URL, CCDownloader, Downloader
+from scraper import Scraper
 from rabbitmq import QUEUE_NAME, rabbitmq_channel
-from tokenized_storage import TokenizedStorage
+from tokenizer import Tokenizer
+from storage import MinIOStorage
 from dotenv import load_dotenv
+import uuid
+import os
 import sys
 import logging
+
 logger = logging.getLogger(__name__)
 
 load_dotenv()
@@ -16,81 +18,77 @@ load_dotenv()
 batches_received = Counter(
     "worker_batches_received_total", "Total number of batches received"
 )
-documents_processed = Counter(
-    "worker_documents_processed_total", "Total number of documents processed"
-)
-warc_records_processed = Counter(
-    "worker_warc_records_processed_total", "Total WARC records processed"
-)
-text_extraction_failures = Counter(
-    "worker_text_extraction_failures_total", "Failed text extractions"
-)
 successful_extractions = Counter(
     "worker_successful_extractions_total", "Successful text extractions"
 )
+failed_extractions = Counter(
+    "worker_failed_extractions_total", "Failed text extractions"
+)
 batch_counter = Counter("worker_batches", "Number of consumed batches")
 
-
-def process_batch(storage, downloader: Downloader, ch, method, _properties, body):
+def process_batch(tokenizer, storage, scraper, ch, method, _properties, body):
     batches_received.inc()
     batch = None
+
     try:
-        batch = json.loads(body) 
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse batch JSON: {e}")
+        batch = json.loads(body)
+    except json.JSONDecodeError:
+        logger.error(f"Failed to parse batch JSON:")
         # Acknowledge the message so it's not requeued
+        # In production we might use something like Sentry
         ch.basic_ack(delivery_tag=method.delivery_tag)
         return
-        
-    print("Received batch of size", len(body)) # TODO: Clean up all prints?
+
+    logger.info("Received batch of size", len(body))
 
     for item in batch:
         try:
-            data = downloader.download_and_unzip(
+            for text in scraper.scrape(
                 item["metadata"]["filename"],
                 int(item["metadata"]["offset"]),
                 int(item["metadata"]["length"]),
-            ) # TODO: This can fail, thats ok
-            documents_processed.inc() # TODO: Think if this is good spot
-            for record in WARCIterator(io.BytesIO(data)):
-                warc_records_processed.inc()
-                if record.rec_type == "response":
-                    try:
-                        text = trafilatura.extract(record.content_stream().read())
-                        if text is None:
-                            text_extraction_failures.inc()
-                        else:
-                            item["metadata"]["timestamp"] = item["timestamp"]
-                            storage.store_document(text, item["metadata"])
-                            successful_extractions.inc()
-                    except Exception:
-                        # TODO: DUMB WHY
-                        text_extraction_failures.inc()
-        except Exception as e:
-            # TODO: How should we do error handling here
-            print(f"Error processing document: {e}")
+            ):
+                item["metadata"]["timestamp"] = item["timestamp"]
+                document_data = tokenizer.create_document(text, item["metadata"])
+
+                json_data = json.dumps(document_data).encode()
+
+                storage.put_object(
+                    f"{str(uuid.uuid4())}.json",
+                    json_data,
+                    len(json_data),
+                )
+
+                successful_extractions.inc()
+        except:
+            # Also could use something like Sentry in production
+            failed_extractions.inc()
+            logger.error("Error while processing document")
 
     batch_counter.inc()
     ch.basic_ack(delivery_tag=method.delivery_tag)
 
-
 def main() -> None:
     try:
         start_http_server(9001)
-        storage = TokenizedStorage()
-        downloader = CCDownloader(BASE_URL)
+        tokenizer = Tokenizer()
+        storage = MinIOStorage(
+            os.getenv("MINIO_BUCKET_CRAWLED_DOCS_NAME"),
+            os.getenv('MINIO_ENDPOINT'),
+            access_key=os.getenv('MINIO_ACCESS_KEY'),
+            secret_key=os.getenv('MINIO_SECRET_KEY'),
+        )
+        scraper = Scraper()
         channel = rabbitmq_channel()
-
         channel.basic_qos(prefetch_count=1)
         channel.basic_consume(
             queue=QUEUE_NAME,
             on_message_callback=lambda ch, method, properties, body: process_batch(
-                storage, downloader, ch, method, properties, body
+                tokenizer, storage, scraper, ch, method, properties, body
             ),
         )
         channel.start_consuming()
-
-    except Exception as e:
+    except Exception:
         logger.exception("Unhandled exception in main:")
         sys.exit(1)
 

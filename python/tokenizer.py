@@ -13,11 +13,9 @@ import warnings
 from typing import List, Dict, Any, Tuple
 import logging
 
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 logging.getLogger("pika").setLevel(logging.WARNING)
-
 
 tokenization_successes = Counter(
     "worker_tokenization_successes_total", "Successfully tokenized documents"
@@ -45,12 +43,11 @@ class TokenizationStatus(Enum):
     PARTIAL = "partial"
 
 
-class TokenizedStorage(MinIOStorage):
+class Tokenizer:
     def __init__(self):
         """Initialize tokenizer with proper error handling"""
         super().__init__()
         self.tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-        self.bucket_name = os.getenv("MINIO_BUCKET_NAME", "tokenized-docs")
         self.max_length = 512
         self.stride = 256
         self._validate_tokenizer()
@@ -141,8 +138,7 @@ class TokenizedStorage(MinIOStorage):
             tokenization_failures.inc()
             return {"status": TokenizationStatus.FAILED, "error": str(e)}
 
-    def store_document(self, text: str, metadata: Dict[str, Any]) -> bool:
-        """Store tokenized document with comprehensive error handling"""
+    def create_document(self, text: str, metadata: Dict[str, Any]) -> bool:
         tokenization_result = self.tokenize_with_chunks(text)
 
         if tokenization_result["status"] != TokenizationStatus.SUCCESS:
@@ -151,7 +147,6 @@ class TokenizedStorage(MinIOStorage):
             raise StorageError(f"Tokenization failed: {error_msg}")
 
         try:
-            doc_id = str(uuid.uuid4())
             document_data = {
                 "chunks": [
                     {
@@ -177,14 +172,7 @@ class TokenizedStorage(MinIOStorage):
                 },
             }
 
-            json_data = json.dumps(document_data).encode()
-            self.client.put_object(
-                self.bucket_name,
-                f"{doc_id}.json",
-                io.BytesIO(json_data),
-                len(json_data),
-            )
-            return True
+            return document_data
 
         except Exception as e:
             logger.error(f"Failed to store document: {e}")

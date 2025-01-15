@@ -4,6 +4,8 @@ import logging
 from typing import Any, Mapping, Sequence
 from prometheus_client import Counter, start_http_server
 import sys
+from storage import MinIOStorage
+import os
 from commoncrawl import (
     BASE_URL,
     CRAWL_PATH,
@@ -26,11 +28,9 @@ documents_non_english = Counter(
     "batcher_documents_filtered_non_english_total",
     "Documents filtered due to non-English language",
 )
-
 documents_invalid_json = Counter(
     "batcher_documents_invalid_json_total", "Documents with invalid JSON metadata"
 )
-
 documents_bad_status = Counter(
     "batcher_documents_filtered_status_total",
     "Documents filtered due to non-200 status",
@@ -40,10 +40,7 @@ documents_accepted = Counter(
 )
 load_dotenv()
 
-BATCH_SIZE = 5
-
 batch_counter = Counter("batcher_batches", "Number of published batches")
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Batcher")
@@ -52,20 +49,7 @@ def parse_args() -> argparse.Namespace:
     )
     return parser.parse_args()
 
-
-def _validate_batch(batch: Sequence[Mapping[str, Any]]) -> bool:
-    """Validate batch size and content"""
-    if not batch:
-        logger.warning("Received empty batch to publish")
-        return False
-        
-    if len(batch) > MAX_BATCH_SIZE:
-        raise ValueError(f"Batch size {len(batch)} exceeds maximum {MAX_BATCH_SIZE}")
-    
-    return True
-
 def _publish_to_queue(channel: MessageQueueChannel, batch: Sequence[Mapping[str, Any]]) -> None:
-    """Publish batch to message queue"""
     try:
         serialized_batch = json.dumps(batch)
         channel.basic_publish(
@@ -88,7 +72,7 @@ def publish_batch(
     url_tracker: ProcessedURLTracker,
 ) -> None:
     """Publish batch and track URLs"""
-    if not _validate_batch(batch):
+    if not batch:
         return
         
     logger.info(f"Publishing batch of {len(batch)} items")
@@ -98,7 +82,6 @@ def publish_batch(
     
     batch_counter.inc()
     logger.info(f"Successfully published batch of {len(batch)} items")
-
 
 def process_index(index, channel, downloader, url_tracker, batch_size):
     found_urls = []
@@ -155,15 +138,21 @@ def main() -> None:
     try:
         args = parse_args()
         start_http_server(9000)
-        url_tracker = ProcessedURLTracker()
+        storage = MinIOStorage(
+            os.getenv("MINIO_BUCKET_PROCESSED_URLS_NAME"),
+            os.getenv('MINIO_ENDPOINT'),
+            access_key=os.getenv('MINIO_ACCESS_KEY'),
+            secret_key=os.getenv('MINIO_SECRET_KEY'),
+        )
+        url_tracker = ProcessedURLTracker(storage) 
         channel = RabbitMQChannel()
         downloader = CCDownloader(f"{BASE_URL}/{CRAWL_PATH}")
-
+        batch_size = 5 # could be program argument
         with CSVIndexReader(args.cluster_idx_filename) as index_reader:
-            process_index(index_reader, channel, downloader, url_tracker, BATCH_SIZE)
+            process_index(index_reader, channel, downloader, url_tracker, batch_size)
 
-    except Exception as e:
-        logger.exception("Unhandled exception in main:")
+    except Exception:
+        logger.exception("Unhandled exception in main: ")
         sys.exit(1)
 
 if __name__ == "__main__":
