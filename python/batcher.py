@@ -83,20 +83,25 @@ def publish_batch(
     batch_counter.inc()
     logger.info(f"Successfully published batch of {len(batch)} items")
 
+
 def process_index(index, channel, downloader, url_tracker, batch_size):
     found_urls = []
     for cdx_chunk in index:
-        data = downloader.download_and_unzip(  # TODO: Break out, deal exception maybe
-            cdx_chunk[1], int(cdx_chunk[2]), int(cdx_chunk[3])
-        ).decode("utf-8")
+        data = _download_chunk(downloader, cdx_chunk)
+        if not data:
+            continue
 
         for line in data.split("\n"):
-            if line == "":
+            if not line:
                 continue
+            
             documents_processed.inc()
             values = line.split(" ")
+            
             try:
                 metadata = json.loads("".join(values[2:]))
+                url = values[0]
+                timestamp = values[1]
 
                 if "languages" not in metadata or "eng" not in metadata["languages"]:
                     documents_non_english.inc()
@@ -106,34 +111,51 @@ def process_index(index, channel, downloader, url_tracker, batch_size):
                     documents_bad_status.inc()
                     continue
 
-                url = values[0]
-                timestamp = values[1]
-
-                if url_tracker.is_processed(url, timestamp): # TODO: Error handle the is_processed
+                if _track_url_safely(url_tracker, url, timestamp):
                     continue
 
                 documents_accepted.inc()
-                found_urls.append(
-                    {
-                        "surt_url": url,
-                        "timestamp": timestamp,
-                        "metadata": metadata,
-                    }
-                )
+                found_urls.append({
+                    "surt_url": url,
+                    "timestamp": timestamp,
+                    "metadata": metadata,
+                })
 
                 if len(found_urls) >= batch_size:
                     publish_batch(channel, found_urls, url_tracker)
                     found_urls = []
 
-            except json.JSONDecodeError as e:
-                logger.warning("failed JSON decode, continuing ", exc_info=1)
+            except json.JSONDecodeError:
+                logger.warning("Failed JSON decode", exc_info=True)
                 documents_invalid_json.inc()
                 continue
+            except Exception:
+                logger.error(f"Unexpected error processing line")
+                continue
 
-    if len(found_urls) > 0:
+    if found_urls:
         publish_batch(channel, found_urls, url_tracker)
+        
 
+def _download_chunk(downloader, chunk):
+    try:
+        return downloader.download_and_unzip(
+            chunk[1], int(chunk[2]), int(chunk[3])
+        ).decode("utf-8")
+    except (ValueError, DecodeError):
+        logger.error("Failed to download or decode chunk")
+        return None
+    except Exception:
+        logger.error("Unexpected error downloading chunk")
+        return None
 
+def _track_url_safely(url_tracker, url, timestamp):
+    try:
+        return url_tracker.is_processed(url, timestamp)
+    except Exception:
+        logger.error("Error checking URL processing status")
+        return True
+        
 def main() -> None:
     try:
         args = parse_args()
